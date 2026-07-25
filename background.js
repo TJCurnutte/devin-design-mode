@@ -14,12 +14,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'sendToDevin') {
-    sendToDevin(request.prompt, request.data).then(sendResponse);
+    sendToDevin(request.prompt, request.data, request.sessionId).then(sendResponse);
     return true;
   }
 
   if (request.action === 'getSessions') {
-    listSessions(request.apiVersion, request.apiKey, request.orgId).then(sendResponse);
+    if (request.apiKey) {
+      listSessions(request.apiVersion, request.apiKey, request.orgId).then(sendResponse);
+    } else {
+      chrome.storage.sync.get({ apiKey: '', apiVersion: 'v1', orgId: '' })
+        .then(opts => listSessions(opts.apiVersion, opts.apiKey, opts.orgId))
+        .then(sendResponse);
+    }
     return true;
   }
 });
@@ -127,7 +133,7 @@ async function uploadAttachment(dataUrl, apiKey) {
   return res.text();
 }
 
-async function sendToDevin(prompt, data) {
+async function sendToDevin(prompt, data, overrideSessionId) {
   const opts = await chrome.storage.sync.get({
     apiKey: '',
     sessionId: '',
@@ -137,9 +143,11 @@ async function sendToDevin(prompt, data) {
   });
 
   if (!opts.apiKey) return { ok: false, error: 'Devin API key not set. Open extension options.' };
-  if (!opts.sessionId) return { ok: false, error: 'Devin session ID not set. Open extension options.' };
 
-  let sessionId = opts.sessionId;
+  const targetSessionId = overrideSessionId || opts.sessionId;
+  if (!targetSessionId) return { ok: false, error: 'Devin session ID not set. Open extension options.' };
+
+  let sessionId = targetSessionId;
   if (opts.apiVersion === 'v3') {
     if (!opts.orgId) return { ok: false, error: 'Organization ID is required for v3 API.' };
     if (!sessionId.startsWith('devin-')) sessionId = 'devin-' + sessionId;

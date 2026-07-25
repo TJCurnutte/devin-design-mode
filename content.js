@@ -113,6 +113,10 @@
       <div class="devin-chat-body" id="devin-chat-body">
         <div class="devin-chat-chips" id="devin-chat-chips"></div>
         <div class="devin-chat-hint">Click a chip to insert its label into your prompt.</div>
+        <label class="devin-chat-label" for="devin-chat-session">Send to session</label>
+        <select class="devin-chat-select" id="devin-chat-session">
+          <option value="">— loading sessions —</option>
+        </select>
         <textarea class="devin-chat-text" placeholder="e.g. img1 change this to match formatting of img2"></textarea>
         <div class="devin-chat-actions">
           <button class="devin-btn devin-btn-secondary" id="devin-chat-cancel">Clear</button>
@@ -183,6 +187,7 @@
     panel.dataset.minimized = 'false';
     panel.classList.remove('devin-chat-minimized');
     updateChatPanel();
+    loadSessionOptions();
     if (!panel.style.left) positionChatPanel();
     panel.querySelector('textarea').focus();
   }
@@ -228,6 +233,43 @@
     title.textContent = STATE.selected.size === 1
       ? 'Ask Devin about 1 element'
       : `Ask Devin about ${STATE.selected.size} elements`;
+  }
+
+  async function loadSessionOptions() {
+    const select = document.getElementById('devin-chat-session');
+    if (!select) return;
+    select.innerHTML = '<option value="">Loading sessions…</option>';
+    try {
+      const stored = await chrome.storage.sync.get({ sessionId: '' });
+      const res = await chrome.runtime.sendMessage({ action: 'getSessions' });
+      if (!res.ok) {
+        select.innerHTML = `<option value="">Error: ${res.error}</option>`;
+        return;
+      }
+      select.innerHTML = '';
+      if (!res.sessions || res.sessions.length === 0) {
+        select.innerHTML = '<option value="">No sessions found</option>';
+        return;
+      }
+      // Active/running sessions first
+      const activeStatuses = new Set(['working', 'blocked', 'resume_requested', 'resumed']);
+      const sorted = res.sessions.slice().sort((a, b) => {
+        const aActive = activeStatuses.has(a.status) ? 1 : 0;
+        const bActive = activeStatuses.has(b.status) ? 1 : 0;
+        if (aActive !== bActive) return bActive - aActive;
+        return new Date(b.updated_at) - new Date(a.updated_at);
+      });
+      sorted.forEach(s => {
+        const label = `${s.title} (${s.session_id.slice(0, 12)}…) — ${s.status}`;
+        const opt = createNode('option');
+        opt.value = s.session_id;
+        opt.textContent = label;
+        if (s.session_id === stored.sessionId) opt.selected = true;
+        select.appendChild(opt);
+      });
+    } catch (e) {
+      select.innerHTML = `<option value="">Error: ${e.message}</option>`;
+    }
   }
 
   function positionChatPanel() {
@@ -441,6 +483,12 @@
   async function submitToDevin(panel, promptText) {
     if (!promptText.trim()) return;
     const status = panel.querySelector('#devin-chat-status');
+    const sessionSelect = document.getElementById('devin-chat-session');
+    const sessionId = sessionSelect ? sessionSelect.value : '';
+    if (!sessionId) {
+      status.textContent = 'Error: Select a Devin session first.';
+      return;
+    }
     status.textContent = 'Capturing context…';
 
     const data = collectSelectionData();
@@ -452,7 +500,8 @@
       const res = await chrome.runtime.sendMessage({
         action: 'sendToDevin',
         prompt: promptText,
-        data
+        data,
+        sessionId
       });
       if (res.ok) {
         status.textContent = 'Sent to Devin.';

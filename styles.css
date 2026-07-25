@@ -172,6 +172,24 @@
   margin-bottom: 10px;
 }
 
+.devin-chat-label {
+  font-size: 12px;
+  color: #aaa;
+  margin-bottom: 4px;
+}
+
+.devin-chat-select {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: #1a1a1a;
+  color: #eee;
+  border: 1px solid #333;
+  border-radius: 8px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
 .devin-chat-text {
   width: 100%;
   min-height: 100px;
