@@ -37,6 +37,11 @@
       cursor: pointer;
     }
     button:hover { opacity: 0.9; }
+    .row { display: flex; gap: 8px; align-items: flex-start; }
+    .row select, .row input { flex: 1; }
+    .row button { margin-top: 0; padding: 10px 14px; white-space: nowrap; }
+    .session-manual { margin-top: 8px; }
+    .hidden { display: none; }
     #status { margin-top: 12px; font-size: 13px; color: #888; }
     code { background: #1a1a1a; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
   </style>
@@ -49,9 +54,18 @@
   <input type="password" id="apiKey" placeholder="DEV-... or apk_...">
   <div class="help">From <a href="https://app.devin.ai/settings/api-keys" target="_blank">Devin Settings → API Keys</a>.</div>
 
-  <label for="sessionId">Devin Session ID</label>
+  <label for="sessionSelect">Devin Session</label>
+  <div class="row">
+    <select id="sessionSelect">
+      <option value="">— enter API key and click Refresh —</option>
+    </select>
+    <button id="refreshSessions" type="button">Refresh</button>
+  </div>
+  <div class="help" id="sessionHelp">Select an active session or enter one manually below.</div>
+
+  <label for="sessionId">Session ID (manual)</label>
   <input type="text" id="sessionId" placeholder="abc123 or devin-abc123">
-  <div class="help">Open a Devin session and copy the ID from the URL, e.g. <code>app.devin.ai/sessions/abc123</code>.</div>
+  <div class="help">Paste a session ID, or pick one from the dropdown after clicking Refresh.</div>
 
   <label for="apiVersion">API Version</label>
   <select id="apiVersion">

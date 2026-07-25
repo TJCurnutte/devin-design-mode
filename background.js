@@ -17,6 +17,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendToDevin(request.prompt, request.data).then(sendResponse);
     return true;
   }
+
+  if (request.action === 'getSessions') {
+    listSessions(request.apiVersion, request.apiKey, request.orgId).then(sendResponse);
+    return true;
+  }
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
@@ -189,6 +194,36 @@ async function sendToDevin(prompt, data) {
     let detail = '';
     try { detail = await res.text(); } catch (e) {}
     return { ok: false, error: `Devin API ${res.status}: ${detail || res.statusText}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+async function listSessions(apiVersion, apiKey, orgId) {
+  if (!apiKey) return { ok: false, error: 'API key not set.' };
+
+  const url = apiVersion === 'v3'
+    ? `https://api.devin.ai/v3/organizations/${orgId}/sessions?limit=50`
+    : 'https://api.devin.ai/v1/sessions?limit=50';
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiKey}` }
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = await res.text(); } catch (e) {}
+      return { ok: false, error: `Devin API ${res.status}: ${detail || res.statusText}` };
+    }
+    const json = await res.json();
+    const sessions = (json.sessions || []).map(s => ({
+      session_id: s.session_id,
+      title: s.title || '(untitled)',
+      status: s.status,
+      updated_at: s.updated_at
+    })).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    return { ok: true, sessions };
   } catch (e) {
     return { ok: false, error: e.message };
   }

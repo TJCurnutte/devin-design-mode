@@ -40,10 +40,8 @@ _Once published:_ [Devin Design Mode](#) — click **Add to Chrome**.
 2. Add your **Devin API key**:
    - Go to [app.devin.ai/settings/api-keys](https://app.devin.ai/settings/api-keys).
    - Create a personal API key.
-3. Add your **Devin session ID**:
-   - Open the Devin session you want to send context to.
-   - Copy the ID from the URL: `app.devin.ai/sessions/<id>`.
-   - Paste only `<id>` (not `devin-`) for v1; the extension handles prefixes for v3.
+3. Click **Refresh** next to the session dropdown to load your active Devin sessions.
+4. Pick the session you want to send context to, or paste a session ID manually.
 
 ## Usage
 
