@@ -18,7 +18,7 @@ Toggle Design Mode on any web page, click or drag to select UI elements, and sen
   - Element selectors, computed styles, bounding boxes
   - React / Vue component names (when detectable)
   - Visible text and HTML snippets
-  - A resized screenshot of the page
+  - A cropped screenshot of your selection, uploaded to Devin's own attachments API
 
 ## Install
 
@@ -56,8 +56,14 @@ _Once published:_ [Devin Design Mode](#) — click **Add to Chrome**.
 
 ## API version notes
 
-- **v1 (personal API keys)** — sends a text message. The screenshot is embedded as a base64 markdown image inside the message. Whether Devin displays the image depends on the Devin chat client.
-- **v3 (service users)** — requires an organization service user with `ManageOrgSessions`, an org ID, and a session ID starting with `devin-`. v3 supports `attachment_urls`, but this MVP still embeds the screenshot as base64 markdown.
+- **v1 (personal API keys — recommended)** — uploads the cropped screenshot to Devin's v1 attachments endpoint and references it in the message with `ATTACHMENT:"<url>"`. This works with any personal API key and renders reliably in Devin.
+- **v3 (service users)** — requires an organization service user with `ManageOrgSessions`, an org ID, and a session ID starting with `devin-`. The cropped screenshot can also be referenced in `attachment_urls`.
+
+## Image mode
+
+- **Attachment (default)** — crop the screenshot to your selection and upload it to Devin. Best quality and reliability.
+- **Base64 markdown** — embed the cropped screenshot directly in the message text. Fallback in case attachment upload is unavailable.
+- **None** — send only element data and text.
 
 ## Privacy & security
 
@@ -80,8 +86,8 @@ cd devin-design-mode
 
 ## Roadmap
 
-- [ ] Crop screenshots to the selected area instead of full-page.
-- [ ] Support uploading images for Devin v3 `attachment_urls`.
+- [x] Crop screenshots to the selected area instead of full-page.
+- [x] Upload images through Devin's v1 attachments endpoint.
 - [ ] Voice-to-prompt input.
 - [ ] Save and reuse selection sets.
 

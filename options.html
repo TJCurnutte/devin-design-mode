@@ -55,10 +55,10 @@
 
   <label for="apiVersion">API Version</label>
   <select id="apiVersion">
-    <option value="v1">v1 — Personal API keys (text only)</option>
-    <option value="v3">v3 — Service users only (with attachments)</option>
+    <option value="v1">v1 — Personal API keys (recommended)</option>
+    <option value="v3">v3 — Service users only</option>
   </select>
-  <div class="help">v1 works with personal API keys. v3 needs an org ID and a service user with <code>ManageOrgSessions</code>.</div>
+  <div class="help">v1 supports the Devin attachments endpoint. v3 needs an org ID and a service user with <code>ManageOrgSessions</code>.</div>
 
   <label for="orgId">Organization ID (v3 only)</label>
   <input type="text" id="orgId" placeholder="org-abc123">
@@ -66,10 +66,11 @@
 
   <label for="imageMode">Image mode</label>
   <select id="imageMode">
+    <option value="attachment">Upload cropped screenshot to Devin (recommended)</option>
     <option value="base64">Embed screenshot as base64 markdown</option>
     <option value="none">No screenshot (text only)</option>
   </select>
-  <div class="help">Base64 markdown may not render in all Devin clients. v3 with attachment URLs is more reliable but requires service-user setup.</div>
+  <div class="help">Attachment mode crops the screenshot to your selection and uploads it through Devin's own v1 attachments API so Devin renders it reliably.</div>
 
   <button id="save">Save</button>
   <div id="status"></div>

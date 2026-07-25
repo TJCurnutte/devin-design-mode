@@ -76,13 +76,59 @@ async function resizeImage(dataUrl, maxWidth) {
   }
 }
 
+async function cropImage(dataUrl, bounds, scroll, dpr) {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    const bitmap = await createImageBitmap(blob);
+    const sx = Math.max(0, (bounds.x - scroll.x) * dpr);
+    const sy = Math.max(0, (bounds.y - scroll.y) * dpr);
+    const sWidth = Math.min(bitmap.width - sx, bounds.width * dpr);
+    const sHeight = Math.min(bitmap.height - sy, bounds.height * dpr);
+    if (sWidth <= 0 || sHeight <= 0) return dataUrl;
+    const canvas = new OffscreenCanvas(sWidth, sHeight);
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+    const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+    const buffer = await outBlob.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return 'data:image/png;base64,' + btoa(binary);
+  } catch (e) {
+    return dataUrl;
+  }
+}
+
+async function dataUrlToBlob(dataUrl) {
+  const res = await fetch(dataUrl);
+  return res.blob();
+}
+
+async function uploadAttachment(dataUrl, apiKey) {
+  const blob = await dataUrlToBlob(dataUrl);
+  const form = new FormData();
+  form.append('file', blob, 'selection.png');
+  const res = await fetch('https://api.devin.ai/v1/attachments', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    body: form
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = await res.text(); } catch (e) {}
+    throw new Error(`Upload failed ${res.status}: ${detail || res.statusText}`);
+  }
+  return res.text();
+}
+
 async function sendToDevin(prompt, data) {
   const opts = await chrome.storage.sync.get({
     apiKey: '',
     sessionId: '',
     apiVersion: 'v1',
     orgId: '',
-    imageMode: 'base64'
+    imageMode: 'attachment'
   });
 
   if (!opts.apiKey) return { ok: false, error: 'Devin API key not set. Open extension options.' };
@@ -94,15 +140,39 @@ async function sendToDevin(prompt, data) {
     if (!sessionId.startsWith('devin-')) sessionId = 'devin-' + sessionId;
   }
 
-  const message = await buildMessage(prompt, data, opts);
+  let attachmentUrl = null;
+
+  if (data.screenshot && data.screenshot.ok && opts.imageMode !== 'none') {
+    try {
+      let imageUrl = data.screenshot.dataUrl;
+      if (opts.imageMode === 'attachment' && data.combinedBounds) {
+        const cropped = await cropImage(
+          data.screenshot.dataUrl,
+          data.combinedBounds,
+          data.scroll || { x: 0, y: 0 },
+          data.devicePixelRatio || 1
+        );
+        imageUrl = cropped;
+      }
+      if (opts.imageMode === 'attachment') {
+        attachmentUrl = await uploadAttachment(imageUrl, opts.apiKey);
+      } else {
+        // base64 fallback — keep the data URL for markdown embed
+        attachmentUrl = imageUrl;
+      }
+    } catch (e) {
+      console.warn('Devin Design Mode: image handling failed', e);
+    }
+  }
+
+  const message = buildMessage(prompt, data, opts, attachmentUrl);
+  const body = opts.apiVersion === 'v3'
+    ? { message, attachment_urls: attachmentUrl && opts.imageMode === 'attachment' ? [attachmentUrl] : [] }
+    : { message };
 
   const url = opts.apiVersion === 'v3'
     ? `https://api.devin.ai/v3/organizations/${opts.orgId}/sessions/${sessionId}/messages`
     : `https://api.devin.ai/v1/sessions/${sessionId}/message`;
-
-  const body = opts.apiVersion === 'v3'
-    ? { message, attachment_urls: data.attachmentUrls || [] }
-    : { message };
 
   try {
     const res = await fetch(url, {
@@ -124,7 +194,7 @@ async function sendToDevin(prompt, data) {
   }
 }
 
-async function buildMessage(prompt, data, opts) {
+function buildMessage(prompt, data, opts, attachmentUrl) {
   const parts = [];
 
   parts.push(`# Design Mode Request`);
@@ -142,10 +212,14 @@ async function buildMessage(prompt, data, opts) {
     parts.push('');
   }
 
-  if (data.screenshot && data.screenshot.ok && opts.imageMode === 'base64') {
+  if (attachmentUrl) {
     parts.push(`## Screenshot`);
-    parts.push(`Current page screenshot is attached below as a base64 image.`);
-    parts.push(`![Current page](${data.screenshot.dataUrl})`);
+    if (opts.imageMode === 'attachment') {
+      parts.push(`ATTACHMENT:"${attachmentUrl}"`);
+    } else {
+      parts.push(`Current page screenshot is attached below as a base64 image.`);
+      parts.push(`![Current page](${attachmentUrl})`);
+    }
     parts.push('');
   }
 

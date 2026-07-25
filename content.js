@@ -198,6 +198,7 @@
       pageUrl,
       viewport,
       scroll,
+      devicePixelRatio: window.devicePixelRatio || 1,
       itemCount: items.length,
       combinedBounds: bounds.length ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY } : null,
       elements: items

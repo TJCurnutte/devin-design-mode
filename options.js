@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', async () => {
   const fields = ['apiKey', 'sessionId', 'apiVersion', 'orgId', 'imageMode'];
-  const defaults = { apiKey: '', sessionId: '', apiVersion: 'v1', orgId: '', imageMode: 'base64' };
+  const defaults = { apiKey: '', sessionId: '', apiVersion: 'v1', orgId: '', imageMode: 'attachment' };
   const stored = await chrome.storage.sync.get(defaults);
   fields.forEach(f => document.getElementById(f).value = stored[f]);
 

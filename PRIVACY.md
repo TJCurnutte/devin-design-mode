@@ -14,8 +14,10 @@ from web pages to your own Devin sessions.
 ## Where the data goes
 
 All collected data is sent **only** to **api.devin.ai** using the Devin API
-key and session ID you provide in the extension settings. The data is sent to
-**your own Devin session** and nowhere else.
+key and session ID you provide in the extension settings. Screenshots are
+uploaded to Devin's own v1 attachments endpoint, then referenced in your
+session message. The data is sent to **your own Devin session** and nowhere
+else.
 
 ## What the extension does not do
 
