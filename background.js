@@ -29,6 +29,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (request.action === 'getSpacesFromDevinUI') {
+    getSpacesFromDevinUI().then(sendResponse);
+    return true;
+  }
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
@@ -220,31 +225,139 @@ async function sendToDevin(prompt, data, overrideSessionId) {
 async function listSessions(apiVersion, apiKey, orgId) {
   if (!apiKey) return { ok: false, error: 'API key not set.' };
 
-  const url = apiVersion === 'v3'
-    ? `https://api.devin.ai/v3/organizations/${orgId}/sessions?limit=50`
-    : 'https://api.devin.ai/v1/sessions?limit=50';
+  const all = [];
+  let offset = 0;
+  const limit = 100;
+  const maxPages = 3;
 
-  try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiKey}` }
-    });
-    if (!res.ok) {
-      let detail = '';
-      try { detail = await res.text(); } catch (e) {}
-      return { ok: false, error: `Devin API ${res.status}: ${detail || res.statusText}` };
+  for (let page = 0; page < maxPages; page++) {
+    const baseUrl = apiVersion === 'v3'
+      ? `https://api.devin.ai/v3/organizations/${orgId}/sessions?limit=${limit}&offset=${offset}`
+      : `https://api.devin.ai/v1/sessions?limit=${limit}&offset=${offset}`;
+    try {
+      const res = await fetch(baseUrl, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      });
+      if (!res.ok) {
+        if (all.length) break;
+        let detail = '';
+        try { detail = await res.text(); } catch (e) {}
+        return { ok: false, error: `Devin API ${res.status}: ${detail || res.statusText}` };
+      }
+      const json = await res.json();
+      const sessions = (json.sessions || []);
+      if (!sessions.length) break;
+      all.push(...sessions);
+      if (sessions.length < limit) break;
+      offset += limit;
+    } catch (e) {
+      if (all.length) break;
+      return { ok: false, error: e.message };
     }
-    const json = await res.json();
-    const sessions = (json.sessions || []).map(s => ({
-      session_id: s.session_id,
-      title: s.title || '(untitled)',
-      status: s.status,
-      updated_at: s.updated_at
-    })).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
-    return { ok: true, sessions };
+  }
+
+  const mapped = all.map(s => ({
+    session_id: s.session_id,
+    title: s.title || '(untitled)',
+    status: s.status,
+    updated_at: s.updated_at
+  })).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+
+  return { ok: true, sessions: mapped };
+}
+
+async function getSpacesFromDevinUI() {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: ['https://app.devin.ai/*', 'https://devin.ai/*', 'https://*.devin.ai/*']
+    });
+    if (!tabs.length) {
+      return { ok: false, error: 'Open app.devin.ai to load Spaces.' };
+    }
+    const all = [];
+    for (const tab of tabs) {
+      try {
+        const [result] = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: scrapeDevinSidebar
+        });
+        if (result && result.result && result.result.length) {
+          all.push(...result.result);
+        }
+      } catch (e) {
+        // ignore tabs that cannot be scripted
+      }
+    }
+    if (!all.length) {
+      return { ok: false, error: 'No Spaces found in the Devin UI. Make sure the Spaces sidebar is open.' };
+    }
+    const seen = new Set();
+    const unique = all.filter(r => {
+      if (seen.has(r.url)) return false;
+      seen.add(r.url);
+      return true;
+    });
+    return { ok: true, spaces: unique };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+function scrapeDevinSidebar() {
+  const results = [];
+  const seen = new Set();
+
+  function add(title, id, url, type) {
+    if (!title || !id || seen.has(url)) return;
+    seen.add(url);
+    results.push({ title, id, url, type, updated_at: null });
+  }
+
+  // 1. Try to find the Spaces heading and nearby links.
+  const all = document.querySelectorAll('*');
+  let spacesHeading = null;
+  for (const el of all) {
+    if (el.children.length === 1 && el.children[0].nodeType === 3 && el.textContent.trim() === 'Spaces') {
+      spacesHeading = el;
+      break;
+    }
+    if (el.children.length === 0 && el.textContent.trim() === 'Spaces') {
+      spacesHeading = el;
+      break;
+    }
+  }
+  if (spacesHeading) {
+    let container = spacesHeading.parentElement;
+    for (let i = 0; i < 8 && container; i++) {
+      const links = container.querySelectorAll('a[href*="/sessions/"], a[href*="/spaces/"]');
+      if (links.length >= 1) {
+        links.forEach(a => {
+          const href = a.getAttribute('href') || '';
+          const m = href.match(/\/(?:sessions|spaces)\/([^/?#]+)/);
+          const title = a.textContent.trim();
+          if (m && title) add(title, m[1], href, href.includes('/spaces/') ? 'space' : 'session');
+        });
+        break;
+      }
+      container = container.parentElement;
+    }
+  }
+
+  // 2. Fallback: left-hand links anywhere on the page.
+  if (!results.length) {
+    const vw = window.innerWidth;
+    document.querySelectorAll('a[href*="/sessions/"], a[href*="/spaces/"]').forEach(a => {
+      const rect = a.getBoundingClientRect();
+      if (rect.left > vw * 0.35) return;
+      const href = a.getAttribute('href') || '';
+      const m = href.match(/\/(?:sessions|spaces)\/([^/?#]+)/);
+      const title = a.textContent.trim();
+      if (m && title) add(title, m[1], href, href.includes('/spaces/') ? 'space' : 'session');
+    });
+  }
+
+  return results;
 }
 
 function buildMessage(prompt, data, opts, attachmentUrl) {

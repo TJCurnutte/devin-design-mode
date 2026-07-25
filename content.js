@@ -113,9 +113,10 @@
       <div class="devin-chat-body" id="devin-chat-body">
         <div class="devin-chat-chips" id="devin-chat-chips"></div>
         <div class="devin-chat-hint">Click a chip to insert its label into your prompt.</div>
-        <label class="devin-chat-label" for="devin-chat-session">Send to session</label>
+        <label class="devin-chat-label" for="devin-chat-session">Send to Space or session</label>
+        <input type="text" class="devin-chat-search" id="devin-chat-search" placeholder="Filter Spaces & sessions…">
         <select class="devin-chat-select" id="devin-chat-session">
-          <option value="">— loading sessions —</option>
+          <option value="">— loading Spaces & sessions —</option>
         </select>
         <textarea class="devin-chat-text" placeholder="e.g. img1 change this to match formatting of img2"></textarea>
         <div class="devin-chat-actions">
@@ -135,6 +136,7 @@
       const chip = e.target.closest('.devin-chip');
       if (chip) insertLabelAtCursor(textarea, chip.dataset.label);
     };
+    panel.querySelector('#devin-chat-search').addEventListener('input', (e) => filterSessionOptions(e.target.value));
     setupDrag(header, panel);
     STATE.chatPanel = panel;
     document.body.appendChild(panel);
@@ -238,36 +240,77 @@
   async function loadSessionOptions() {
     const select = document.getElementById('devin-chat-session');
     if (!select) return;
-    select.innerHTML = '<option value="">Loading sessions…</option>';
+    select.innerHTML = '<option value="">Loading Spaces & sessions…</option>';
+    select.dataset.source = '';
+
     try {
-      const res = await chrome.runtime.sendMessage({ action: 'getSessions' });
-      if (!res.ok) {
-        select.innerHTML = `<option value="">Error: ${res.error}</option>`;
+      const [spacesRes, sessionsRes] = await Promise.all([
+        chrome.runtime.sendMessage({ action: 'getSpacesFromDevinUI' }).catch(() => ({ ok: false })),
+        chrome.runtime.sendMessage({ action: 'getSessions' }).catch(() => ({ ok: false }))
+      ]);
+
+      const seen = new Set();
+      const items = [];
+
+      if (spacesRes.ok && spacesRes.spaces) {
+        spacesRes.spaces.forEach(sp => {
+          if (seen.has(sp.id)) return;
+          seen.add(sp.id);
+          items.push({
+            id: sp.id,
+            title: sp.title,
+            status: sp.type === 'space' ? 'space' : (sp.status || ''),
+            updated_at: sp.updated_at,
+            source: 'Spaces bar'
+          });
+        });
+      }
+
+      if (sessionsRes.ok && sessionsRes.sessions) {
+        sessionsRes.sessions.forEach(s => {
+          if (seen.has(s.session_id)) return;
+          seen.add(s.session_id);
+          items.push({
+            id: s.session_id,
+            title: s.title,
+            status: s.status,
+            updated_at: s.updated_at,
+            source: 'API'
+          });
+        });
+      }
+
+      if (!items.length) {
+        const err = spacesRes.error || sessionsRes.error || 'No Spaces or sessions found.';
+        select.innerHTML = `<option value="">${err}</option>`;
         return;
       }
-      select.innerHTML = '';
-      if (!res.sessions || res.sessions.length === 0) {
-        select.innerHTML = '<option value="">No sessions found</option>';
-        return;
-      }
-      // Active/running sessions first
+
+      // Active sessions first, then Spaces, then by recency
       const activeStatuses = new Set(['working', 'blocked', 'resume_requested', 'resumed']);
-      const sorted = res.sessions.slice().sort((a, b) => {
-        const aActive = activeStatuses.has(a.status) ? 1 : 0;
-        const bActive = activeStatuses.has(b.status) ? 1 : 0;
+      items.sort((a, b) => {
+        const aActive = activeStatuses.has(a.status) ? 2 : a.source === 'Spaces bar' ? 1 : 0;
+        const bActive = activeStatuses.has(b.status) ? 2 : b.source === 'Spaces bar' ? 1 : 0;
         if (aActive !== bActive) return bActive - aActive;
-        return new Date(b.updated_at) - new Date(a.updated_at);
+        const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+        const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+        return bTime - aTime;
       });
-      sorted.forEach(s => {
-        const when = timeAgo(new Date(s.updated_at));
-        const status = s.status ? s.status.replace(/_/g, ' ') : '';
-        const label = `${s.title} — ${when} — ${status}`;
+
+      const defaultId = sessionsRes.defaultSessionId || '';
+      select.innerHTML = '';
+      items.forEach(item => {
+        const when = item.updated_at ? timeAgo(new Date(item.updated_at)) : '';
+        const status = item.status ? item.status.replace(/_/g, ' ') : '';
+        const parts = [item.title, when, status, item.source === 'Spaces bar' ? 'Spaces' : ''].filter(Boolean);
         const opt = createNode('option');
-        opt.value = s.session_id;
-        opt.textContent = label;
-        if (s.session_id === res.defaultSessionId) opt.selected = true;
+        opt.value = item.id;
+        opt.textContent = parts.join(' — ');
+        opt.dataset.filter = parts.join(' ').toLowerCase();
+        if (item.id === defaultId) opt.selected = true;
         select.appendChild(opt);
       });
+      select.dataset.items = JSON.stringify(items.map(i => ({ id: i.id, title: i.title })));
     } catch (e) {
       select.innerHTML = `<option value="">Error: ${e.message}</option>`;
     }
@@ -289,6 +332,16 @@
       if (v >= 1) return `${v}${u.label} ago`;
     }
     return 'just now';
+  }
+
+  function filterSessionOptions(query) {
+    const select = document.getElementById('devin-chat-session');
+    if (!select) return;
+    const q = query.trim().toLowerCase();
+    Array.from(select.options).forEach(opt => {
+      const text = (opt.dataset.filter || opt.textContent).toLowerCase();
+      opt.style.display = !q || text.includes(q) ? '' : 'none';
+    });
   }
 
   function positionChatPanel() {
