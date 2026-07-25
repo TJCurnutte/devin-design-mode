@@ -19,13 +19,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'getSessions') {
-    if (request.apiKey) {
-      listSessions(request.apiVersion, request.apiKey, request.orgId).then(sendResponse);
-    } else {
-      chrome.storage.sync.get({ apiKey: '', apiVersion: 'v1', orgId: '' })
-        .then(opts => listSessions(opts.apiVersion, opts.apiKey, opts.orgId))
-        .then(sendResponse);
-    }
+    chrome.storage.sync.get({ apiKey: '', apiVersion: 'v1', orgId: '', sessionId: '' }, async (opts) => {
+      const res = await listSessions(opts.apiVersion, opts.apiKey, opts.orgId);
+      if (res.ok) {
+        sendResponse({ ok: true, sessions: res.sessions, defaultSessionId: opts.sessionId });
+      } else {
+        sendResponse(res);
+      }
+    });
     return true;
   }
 });

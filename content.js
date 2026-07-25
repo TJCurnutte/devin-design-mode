@@ -240,7 +240,6 @@
     if (!select) return;
     select.innerHTML = '<option value="">Loading sessions…</option>';
     try {
-      const stored = await chrome.storage.sync.get({ sessionId: '' });
       const res = await chrome.runtime.sendMessage({ action: 'getSessions' });
       if (!res.ok) {
         select.innerHTML = `<option value="">Error: ${res.error}</option>`;
@@ -260,16 +259,36 @@
         return new Date(b.updated_at) - new Date(a.updated_at);
       });
       sorted.forEach(s => {
-        const label = `${s.title} (${s.session_id.slice(0, 12)}…) — ${s.status}`;
+        const when = timeAgo(new Date(s.updated_at));
+        const status = s.status ? s.status.replace(/_/g, ' ') : '';
+        const label = `${s.title} — ${when} — ${status}`;
         const opt = createNode('option');
         opt.value = s.session_id;
         opt.textContent = label;
-        if (s.session_id === stored.sessionId) opt.selected = true;
+        if (s.session_id === res.defaultSessionId) opt.selected = true;
         select.appendChild(opt);
       });
     } catch (e) {
       select.innerHTML = `<option value="">Error: ${e.message}</option>`;
     }
+  }
+
+  function timeAgo(date) {
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+    const units = [
+      { label: 'y', seconds: 31536000 },
+      { label: 'mo', seconds: 2592000 },
+      { label: 'w', seconds: 604800 },
+      { label: 'd', seconds: 86400 },
+      { label: 'h', seconds: 3600 },
+      { label: 'm', seconds: 60 },
+      { label: 's', seconds: 1 }
+    ];
+    for (const u of units) {
+      const v = Math.floor(seconds / u.seconds);
+      if (v >= 1) return `${v}${u.label} ago`;
+    }
+    return 'just now';
   }
 
   function positionChatPanel() {
