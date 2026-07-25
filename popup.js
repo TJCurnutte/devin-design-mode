@@ -6,9 +6,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     : 'Not configured — open Settings';
 
   document.getElementById('toggle').onclick = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) return;
-    chrome.tabs.sendMessage(tab.id, { action: 'toggle' }, () => window.close());
+    try {
+      const res = await chrome.runtime.sendMessage({ action: 'toggle' });
+      if (res && res.error) {
+        alert(res.error);
+      }
+    } catch (e) {
+      alert('Could not toggle Design Mode on this page.');
+    }
+    window.close();
   };
 
   document.getElementById('options').onclick = () => {

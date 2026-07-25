@@ -1,10 +1,9 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'toggle') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (!tabs[0]) return sendResponse({ active: false });
-      chrome.tabs.sendMessage(tabs[0].id, { action: 'toggle' }, (res) => {
-        sendResponse(res || { active: false });
-      });
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      if (!tabs[0]) return sendResponse({ active: false, error: 'No active tab.' });
+      const result = await toggleActiveTab(tabs[0].id, tabs[0].url);
+      sendResponse(result);
     });
     return true;
   }
@@ -20,13 +19,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
-chrome.commands.onCommand.addListener((command) => {
+chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'toggle-design-mode') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { action: 'toggle' });
-    });
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab) await toggleActiveTab(tab.id, tab.url);
   }
 });
+
+async function toggleActiveTab(tabId, tabUrl) {
+  if (tabUrl && (tabUrl.startsWith('chrome://') || tabUrl.startsWith('https://chrome.google.com/webstore'))) {
+    return { active: false, error: 'Devin Design Mode cannot run on Chrome internal pages or the Web Store.' };
+  }
+
+  try {
+    return await chrome.tabs.sendMessage(tabId, { action: 'toggle' });
+  } catch (e) {
+    // Content script not loaded. Inject it and try again.
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      await chrome.scripting.insertCSS({ target: { tabId }, files: ['styles.css'] });
+      return await chrome.tabs.sendMessage(tabId, { action: 'toggle' });
+    } catch (e2) {
+      return { active: false, error: 'Could not activate Design Mode on this page.' };
+    }
+  }
+}
 
 async function capture(tab) {
   try {
