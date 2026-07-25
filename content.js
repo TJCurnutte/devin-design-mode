@@ -20,6 +20,7 @@
     hoverEl: null,
     shiftDown: false,
     metaDown: false,
+    paused: false,
     toolbar: null,
     chatPanel: null,
     overlay: null
@@ -50,11 +51,13 @@
       <div class="devin-toolbar-title">Devin Design Mode</div>
       <div class="devin-toolbar-actions">
         <button class="devin-btn devin-btn-secondary" id="devin-clear">Clear</button>
+        <button class="devin-btn devin-btn-secondary" id="devin-pause" title="Pause selection so you can click UI tabs">Pause</button>
         <button class="devin-btn devin-btn-primary" id="devin-ask">Ask Devin</button>
       </div>
       <button class="devin-close" id="devin-close" title="Exit Design Mode">×</button>
     `;
     tb.querySelector('#devin-clear').onclick = clearSelection;
+    tb.querySelector('#devin-pause').onclick = togglePause;
     tb.querySelector('#devin-ask').onclick = () => openChatPanel();
     tb.querySelector('#devin-close').onclick = toggleActive;
     STATE.toolbar = tb;
@@ -65,53 +68,145 @@
   function updateToolbar() {
     const tb = getToolbar();
     const count = STATE.selected.size;
+    const paused = STATE.paused;
     tb.querySelector('.devin-toolbar-title').textContent = count
-      ? `Devin Design Mode — ${count} selected`
-      : 'Devin Design Mode';
+      ? `Devin Design Mode — ${count} selected${paused ? ' (paused)' : ''}`
+      : `Devin Design Mode${paused ? ' (paused)' : ''}`;
+    const pauseBtn = tb.querySelector('#devin-pause');
+    pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  }
+
+  function togglePause() {
+    STATE.paused = !STATE.paused;
+    updateToolbar();
+    if (STATE.paused) {
+      document.removeEventListener('mousemove', onMouseMove, true);
+      document.removeEventListener('mousedown', onMouseDown, true);
+      document.removeEventListener('mousemove', onMouseMoveBox, true);
+      document.removeEventListener('mouseup', onMouseUp, true);
+      document.removeEventListener('click', onClick, true);
+      if (STATE.hoverEl) {
+        STATE.hoverEl.removeAttribute(HOVER_ATTR);
+        STATE.hoverEl = null;
+      }
+    } else {
+      document.addEventListener('mousemove', onMouseMove, true);
+      document.addEventListener('mousedown', onMouseDown, true);
+      document.addEventListener('mousemove', onMouseMoveBox, true);
+      document.addEventListener('mouseup', onMouseUp, true);
+      document.addEventListener('click', onClick, true);
+    }
   }
 
   function getChatPanel() {
     if (STATE.chatPanel) return STATE.chatPanel;
     const panel = createNode('div', 'devin-design-chat');
+    panel.dataset.minimized = 'false';
     panel.innerHTML = `
-      <div class="devin-chat-header">
+      <div class="devin-chat-header" id="devin-chat-header">
         <div class="devin-chat-title">Ask Devin</div>
-        <button class="devin-close" id="devin-chat-close" title="Close chat">×</button>
+        <div class="devin-chat-header-actions">
+          <button class="devin-minimize" id="devin-chat-minimize" title="Minimize">−</button>
+          <button class="devin-close" id="devin-chat-close" title="Close chat and clear selection">×</button>
+        </div>
       </div>
-      <div class="devin-chat-chips" id="devin-chat-chips"></div>
-      <div class="devin-chat-hint">Click a chip to insert its label into your prompt.</div>
-      <textarea class="devin-chat-text" placeholder="e.g. img1 change this to match formatting of img2"></textarea>
-      <div class="devin-chat-actions">
-        <button class="devin-btn devin-btn-secondary" id="devin-chat-cancel">Clear</button>
-        <button class="devin-btn devin-btn-primary" id="devin-chat-send">Send</button>
+      <div class="devin-chat-body" id="devin-chat-body">
+        <div class="devin-chat-chips" id="devin-chat-chips"></div>
+        <div class="devin-chat-hint">Click a chip to insert its label into your prompt.</div>
+        <textarea class="devin-chat-text" placeholder="e.g. img1 change this to match formatting of img2"></textarea>
+        <div class="devin-chat-actions">
+          <button class="devin-btn devin-btn-secondary" id="devin-chat-cancel">Clear</button>
+          <button class="devin-btn devin-btn-primary" id="devin-chat-send">Send</button>
+        </div>
+        <div class="devin-chat-status" id="devin-chat-status"></div>
       </div>
-      <div class="devin-chat-status" id="devin-chat-status"></div>
     `;
     const textarea = panel.querySelector('textarea');
+    const header = panel.querySelector('#devin-chat-header');
     panel.querySelector('#devin-chat-close').onclick = closeChatPanel;
+    panel.querySelector('#devin-chat-minimize').onclick = toggleMinimizeChat;
     panel.querySelector('#devin-chat-cancel').onclick = clearSelection;
     panel.querySelector('#devin-chat-send').onclick = () => submitToDevin(panel, textarea.value);
     panel.querySelector('#devin-chat-chips').onclick = (e) => {
       const chip = e.target.closest('.devin-chip');
       if (chip) insertLabelAtCursor(textarea, chip.dataset.label);
     };
+    setupDrag(header, panel);
     STATE.chatPanel = panel;
     document.body.appendChild(panel);
     return panel;
+  }
+
+  function setupDrag(handle, panel) {
+    let dragging = false;
+    let offsetX = 0;
+    let offsetY = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.devin-chat-header-actions')) return;
+      dragging = true;
+      const rect = panel.getBoundingClientRect();
+      offsetX = e.clientX - rect.left;
+      offsetY = e.clientY - rect.top;
+      panel.style.transition = 'none';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const pw = panel.offsetWidth;
+      const ph = panel.offsetHeight;
+      let left = e.clientX - offsetX;
+      let top = e.clientY - offsetY;
+      if (left < 0) left = 0;
+      if (top < 0) top = 0;
+      if (left + pw > vw) left = vw - pw;
+      if (top + ph > vh) top = vh - ph;
+      panel.style.left = left + 'px';
+      panel.style.top = top + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (dragging) {
+        dragging = false;
+        panel.style.transition = '';
+      }
+    });
   }
 
   function openChatPanel() {
     if (STATE.selected.size === 0) return;
     const panel = getChatPanel();
     panel.style.display = 'flex';
+    panel.dataset.minimized = 'false';
+    panel.classList.remove('devin-chat-minimized');
     updateChatPanel();
-    positionChatPanel();
+    if (!panel.style.left) positionChatPanel();
     panel.querySelector('textarea').focus();
+  }
+
+  function toggleMinimizeChat() {
+    const panel = getChatPanel();
+    const isMin = panel.dataset.minimized === 'true';
+    panel.dataset.minimized = isMin ? 'false' : 'true';
+    panel.classList.toggle('devin-chat-minimized', !isMin);
+    if (!isMin) {
+      panel.querySelector('#devin-chat-minimize').textContent = '+';
+      panel.querySelector('#devin-chat-minimize').title = 'Expand';
+    } else {
+      panel.querySelector('#devin-chat-minimize').textContent = '−';
+      panel.querySelector('#devin-chat-minimize').title = 'Minimize';
+      panel.querySelector('textarea').focus();
+    }
   }
 
   function closeChatPanel() {
     if (STATE.chatPanel) {
       STATE.chatPanel.style.display = 'none';
+      STATE.chatPanel.dataset.minimized = 'false';
+      STATE.chatPanel.classList.remove('devin-chat-minimized');
     }
     clearSelection();
   }
@@ -140,22 +235,21 @@
     const rects = Array.from(STATE.selected).map(el => el.getBoundingClientRect());
     const minX = Math.min(...rects.map(r => r.left));
     const minY = Math.min(...rects.map(r => r.top));
-    const maxX = Math.max(...rects.map(r => r.right));
     const maxY = Math.max(...rects.map(r => r.bottom));
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
+    const cx = (minX + Math.max(...rects.map(r => r.right))) / 2;
 
-    // Default center, but keep within viewport
+    // Default center below selection, but keep within viewport
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const pw = Math.min(520, vw - 40);
     panel.style.width = pw + 'px';
     let left = cx - pw / 2;
-    let top = maxY + 24 + window.scrollY;
+    let top = maxY + 24;
     if (left < 20) left = 20;
     if (left + pw > vw - 20) left = vw - pw - 20;
-    if (top + 280 > vh + window.scrollY) top = Math.max(20, minY + window.scrollY - 300);
+    if (top + 280 > vh - 20) top = Math.max(20, minY - 300);
 
+    panel.style.position = 'fixed';
     panel.style.left = left + 'px';
     panel.style.top = top + 'px';
   }
@@ -526,17 +620,16 @@
   function onScrollResize() {
     if (!STATE.active) return;
     updateAllBadges();
-    if (STATE.chatPanel && STATE.chatPanel.style.display !== 'none') {
-      positionChatPanel();
-    }
   }
 
   function toggleActive() {
     STATE.active = !STATE.active;
     const overlay = getOverlay();
     if (STATE.active) {
+      STATE.paused = false;
       overlay.classList.add('devin-design-active');
       getToolbar().style.display = 'flex';
+      updateToolbar();
       document.addEventListener('mousemove', onMouseMove, true);
       document.addEventListener('mousedown', onMouseDown, true);
       document.addEventListener('mousemove', onMouseMoveBox, true);

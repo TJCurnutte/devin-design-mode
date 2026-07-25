@@ -143,6 +143,9 @@ async function sendToDevin(prompt, data) {
   if (opts.apiVersion === 'v3') {
     if (!opts.orgId) return { ok: false, error: 'Organization ID is required for v3 API.' };
     if (!sessionId.startsWith('devin-')) sessionId = 'devin-' + sessionId;
+  } else {
+    // v1 expects the raw session ID without the devin- prefix.
+    if (sessionId.startsWith('devin-')) sessionId = sessionId.slice(6);
   }
 
   let attachmentUrl = null;
@@ -196,6 +199,8 @@ async function sendToDevin(prompt, data) {
     let error = `Devin API ${res.status}: ${detail || res.statusText}`;
     if (res.status === 401 || res.status === 403) {
       error += '. Check that your API key is correct and that the session ID belongs to your account.';
+    } else if (res.status === 404) {
+      error += '. The session may have finished, expired, or the session ID may be wrong. Pick an active session in settings.';
     }
     return { ok: false, error };
   } catch (e) {
