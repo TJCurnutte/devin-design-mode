@@ -13,9 +13,12 @@ Toggle Design Mode on any web page, click or drag to select UI elements, and sen
 - **Click** to select an element.
 - **Cmd/Ctrl+Click** to multi-select or deselect.
 - **Drag a box** to select every element inside an area.
-- **Ask Devin** to change the selected elements. The extension sends:
+- The extension auto-labels each selected element (`img1`, `button1`, `div1`, etc.) with a unique color and badge.
+- A chat panel opens as soon as you click the first element. Click more elements to add them to the same chat.
+- Click a chip to insert its label into your prompt (e.g. `img1 change this to match formatting of img2`).
+- **Send** to Devin. The extension sends:
   - Page URL and viewport size
-  - Element selectors, computed styles, bounding boxes
+  - Element selectors, computed styles, bounding boxes, labels
   - React / Vue component names (when detectable)
   - Visible text and HTML snippets
   - A cropped screenshot of your selection, uploaded to Devin's own attachments API
@@ -47,10 +50,11 @@ _Once published:_ [Devin Design Mode](#) — click **Add to Chrome**.
 
 1. Open the local web app or page you want to edit.
 2. Press `Cmd/Ctrl+Shift+D` to enter Design Mode.
-3. Click or drag to select the elements you want to change.
-4. Click **Ask Devin** in the floating toolbar.
-5. Type your request (e.g. *"make these buttons use the primary brand color"*) and hit **Send**.
-6. Switch to your Devin session to see the agent work with the context.
+3. Click or drag to select the first element. A chat panel opens automatically.
+4. Click additional elements to add them, or `Cmd/Ctrl+Click` to multi-select.
+5. Click a chip in the chat panel to insert its label (e.g. `img1`) into your prompt.
+6. Type your request (e.g. `img1 change this to match formatting of img2`) and hit **Send**.
+7. Switch to your Devin session to see the agent work with the context.
 
 ## API version notes
 
@@ -86,6 +90,7 @@ cd devin-design-mode
 
 - [x] Crop screenshots to the selected area instead of full-page.
 - [x] Upload images through Devin's v1 attachments endpoint.
+- [x] Auto-label selected elements and open an inline chat panel like Cursor.
 - [ ] Voice-to-prompt input.
 - [ ] Save and reuse selection sets.
 

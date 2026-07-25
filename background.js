@@ -193,7 +193,11 @@ async function sendToDevin(prompt, data) {
     }
     let detail = '';
     try { detail = await res.text(); } catch (e) {}
-    return { ok: false, error: `Devin API ${res.status}: ${detail || res.statusText}` };
+    let error = `Devin API ${res.status}: ${detail || res.statusText}`;
+    if (res.status === 401 || res.status === 403) {
+      error += '. Check that your API key is correct and that the session ID belongs to your account.';
+    }
+    return { ok: false, error };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -231,11 +235,16 @@ async function listSessions(apiVersion, apiKey, orgId) {
 
 function buildMessage(prompt, data, opts, attachmentUrl) {
   const parts = [];
+  const labels = data.labels && data.labels.length ? data.labels : [];
 
   parts.push(`# Design Mode Request`);
   parts.push(`Page: ${data.pageUrl}`);
   parts.push(`Viewport: ${data.viewport.width}x${data.viewport.height}`);
-  parts.push(`Selected items: ${data.itemCount}`);
+  if (labels.length) {
+    parts.push(`Selected elements: ${labels.join(', ')}`);
+  } else {
+    parts.push(`Selected items: ${data.itemCount}`);
+  }
   parts.push('');
   parts.push(`## User request`);
   parts.push(prompt);
@@ -260,8 +269,10 @@ function buildMessage(prompt, data, opts, attachmentUrl) {
 
   if (data.elements && data.elements.length) {
     parts.push(`## Elements`);
-    data.elements.forEach((el, idx) => {
-      parts.push(`### Element ${idx + 1}: ${el.tag}${el.id ? '#' + el.id : ''}${el.componentName ? ' (' + el.componentName + ')' : ''}`);
+    data.elements.forEach((el) => {
+      const label = el.label ? `${el.label} ` : '';
+      parts.push(`### ${label}${el.tag}${el.id ? '#' + el.id : ''}${el.componentName ? ' (' + el.componentName + ')' : ''}`);
+      if (el.label) parts.push(`Label: ${el.label}`);
       parts.push(`Selector: \`${el.selector}\``);
       if (el.className) parts.push(`Classes: \`${el.className}\``);
       parts.push(`Bounds: x=${Math.round(el.bounds.x)} y=${Math.round(el.bounds.y)} w=${Math.round(el.bounds.width)} h=${Math.round(el.bounds.height)}`);

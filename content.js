@@ -4,24 +4,29 @@
   if (window.__devinDesignModeLoaded) return;
   window.__devinDesignModeLoaded = true;
 
+  const PALETTE = [
+    '#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981',
+    '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#d946ef',
+    '#f43f5e', '#14b8a6'
+  ];
+
   const STATE = {
     active: false,
     selecting: false,
     boxStart: null,
     boxEl: null,
     selected: new Set(),
+    labels: new Map(), // element -> { label, color, badge }
     hoverEl: null,
     shiftDown: false,
     metaDown: false,
     toolbar: null,
-    promptPanel: null,
+    chatPanel: null,
     overlay: null
   };
 
   const SELECTOR_ATTR = 'data-devin-design-selected';
   const HOVER_ATTR = 'data-devin-design-hover';
-
-  const ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>`;
 
   function createNode(tag, className, html) {
     const el = document.createElement(tag);
@@ -50,7 +55,7 @@
       <button class="devin-close" id="devin-close" title="Exit Design Mode">×</button>
     `;
     tb.querySelector('#devin-clear').onclick = clearSelection;
-    tb.querySelector('#devin-ask').onclick = openPromptPanel;
+    tb.querySelector('#devin-ask').onclick = () => openChatPanel();
     tb.querySelector('#devin-close').onclick = toggleActive;
     STATE.toolbar = tb;
     document.body.appendChild(tb);
@@ -65,36 +70,128 @@
       : 'Devin Design Mode';
   }
 
-  function openPromptPanel() {
-    if (STATE.selected.size === 0) return alert('Select at least one element or area first.');
-    if (STATE.promptPanel) STATE.promptPanel.remove();
-
-    const panel = createNode('div', 'devin-design-prompt');
+  function getChatPanel() {
+    if (STATE.chatPanel) return STATE.chatPanel;
+    const panel = createNode('div', 'devin-design-chat');
     panel.innerHTML = `
-      <div class="devin-prompt-header">Send to Devin</div>
-      <textarea class="devin-prompt-text" placeholder="Describe what you want to change..."></textarea>
-      <div class="devin-prompt-actions">
-        <button class="devin-btn devin-btn-secondary" id="devin-prompt-cancel">Cancel</button>
-        <button class="devin-btn devin-btn-primary" id="devin-prompt-submit">Send</button>
+      <div class="devin-chat-header">
+        <div class="devin-chat-title">Ask Devin</div>
+        <button class="devin-close" id="devin-chat-close" title="Close chat">×</button>
       </div>
-      <div class="devin-prompt-status"></div>
+      <div class="devin-chat-chips" id="devin-chat-chips"></div>
+      <div class="devin-chat-hint">Click a chip to insert its label into your prompt.</div>
+      <textarea class="devin-chat-text" placeholder="e.g. img1 change this to match formatting of img2"></textarea>
+      <div class="devin-chat-actions">
+        <button class="devin-btn devin-btn-secondary" id="devin-chat-cancel">Clear</button>
+        <button class="devin-btn devin-btn-primary" id="devin-chat-send">Send</button>
+      </div>
+      <div class="devin-chat-status" id="devin-chat-status"></div>
     `;
     const textarea = panel.querySelector('textarea');
-    panel.querySelector('#devin-prompt-cancel').onclick = () => panel.remove();
-    panel.querySelector('#devin-prompt-submit').onclick = () => submitToDevin(panel, textarea.value);
-    STATE.promptPanel = panel;
+    panel.querySelector('#devin-chat-close').onclick = closeChatPanel;
+    panel.querySelector('#devin-chat-cancel').onclick = clearSelection;
+    panel.querySelector('#devin-chat-send').onclick = () => submitToDevin(panel, textarea.value);
+    panel.querySelector('#devin-chat-chips').onclick = (e) => {
+      const chip = e.target.closest('.devin-chip');
+      if (chip) insertLabelAtCursor(textarea, chip.dataset.label);
+    };
+    STATE.chatPanel = panel;
     document.body.appendChild(panel);
+    return panel;
+  }
+
+  function openChatPanel() {
+    if (STATE.selected.size === 0) return;
+    const panel = getChatPanel();
+    panel.style.display = 'flex';
+    updateChatPanel();
+    positionChatPanel();
+    panel.querySelector('textarea').focus();
+  }
+
+  function closeChatPanel() {
+    if (STATE.chatPanel) {
+      STATE.chatPanel.style.display = 'none';
+    }
+    clearSelection();
+  }
+
+  function updateChatPanel() {
+    const panel = getChatPanel();
+    const chips = panel.querySelector('#devin-chat-chips');
+    chips.innerHTML = '';
+    STATE.selected.forEach(el => {
+      const data = STATE.labels.get(el);
+      if (!data) return;
+      const chip = createNode('div', 'devin-chip');
+      chip.dataset.label = data.label;
+      chip.style.setProperty('--chip-color', data.color);
+      chip.textContent = `${data.label} (${el.tagName.toLowerCase()})`;
+      chips.appendChild(chip);
+    });
+    const title = panel.querySelector('.devin-chat-title');
+    title.textContent = STATE.selected.size === 1
+      ? 'Ask Devin about 1 element'
+      : `Ask Devin about ${STATE.selected.size} elements`;
+  }
+
+  function positionChatPanel() {
+    const panel = getChatPanel();
+    const rects = Array.from(STATE.selected).map(el => el.getBoundingClientRect());
+    const minX = Math.min(...rects.map(r => r.left));
+    const minY = Math.min(...rects.map(r => r.top));
+    const maxX = Math.max(...rects.map(r => r.right));
+    const maxY = Math.max(...rects.map(r => r.bottom));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+
+    // Default center, but keep within viewport
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const pw = Math.min(520, vw - 40);
+    panel.style.width = pw + 'px';
+    let left = cx - pw / 2;
+    let top = maxY + 24 + window.scrollY;
+    if (left < 20) left = 20;
+    if (left + pw > vw - 20) left = vw - pw - 20;
+    if (top + 280 > vh + window.scrollY) top = Math.max(20, minY + window.scrollY - 300);
+
+    panel.style.left = left + 'px';
+    panel.style.top = top + 'px';
+  }
+
+  function insertLabelAtCursor(textarea, label) {
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    const text = textarea.value;
+    const before = text.slice(0, start);
+    const after = text.slice(end);
+    const pad = before.length && !before.endsWith(' ') ? ' ' : '';
+    textarea.value = before + pad + label + ' ' + after;
+    textarea.selectionStart = textarea.selectionEnd = before.length + pad.length + label.length + 1;
     textarea.focus();
   }
 
   function clearSelection() {
-    STATE.selected.forEach(el => el.removeAttribute(SELECTOR_ATTR));
+    STATE.selected.forEach(el => {
+      el.removeAttribute(SELECTOR_ATTR);
+      el.style.removeProperty('--devin-selection-color');
+    });
+    STATE.labels.forEach(data => {
+      if (data.badge && data.badge.parentNode) data.badge.remove();
+    });
     STATE.selected.clear();
+    STATE.labels.clear();
     updateToolbar();
+    if (STATE.chatPanel) {
+      STATE.chatPanel.style.display = 'none';
+      STATE.chatPanel.querySelector('textarea').value = '';
+      STATE.chatPanel.querySelector('#devin-chat-status').textContent = '';
+    }
   }
 
   function isInToolbar(el) {
-    return el.closest && el.closest('.devin-design-toolbar, .devin-design-prompt');
+    return el.closest && el.closest('.devin-design-toolbar, .devin-design-chat');
   }
 
   function elementInfo(el) {
@@ -115,6 +212,7 @@
     const selector = getUniqueSelector(el);
     const text = el.innerText ? el.innerText.slice(0, 500) : '';
     const html = el.outerHTML ? el.outerHTML.slice(0, 1500) : '';
+    const labelData = STATE.labels.get(el) || {};
 
     return {
       tag: el.tagName.toLowerCase(),
@@ -125,6 +223,7 @@
       text,
       html,
       styles,
+      label: labelData.label || null,
       bounds: {
         x: rect.x + window.scrollX,
         y: rect.y + window.scrollY,
@@ -177,22 +276,61 @@
     return path.join(' > ');
   }
 
+  function assignLabels() {
+    // Remove existing badges
+    STATE.labels.forEach(data => {
+      if (data.badge && data.badge.parentNode) data.badge.remove();
+    });
+    STATE.labels.clear();
+
+    const counters = {};
+    let colorIndex = 0;
+    STATE.selected.forEach(el => {
+      const tag = el.tagName.toLowerCase();
+      counters[tag] = (counters[tag] || 0) + 1;
+      const label = `${tag}${counters[tag]}`;
+      const color = PALETTE[colorIndex % PALETTE.length];
+      colorIndex++;
+      const badge = createBadge(el, label, color);
+      STATE.labels.set(el, { label, color, badge });
+      el.style.setProperty('--devin-selection-color', color);
+      el.setAttribute(SELECTOR_ATTR, 'true');
+    });
+  }
+
+  function createBadge(el, label, color) {
+    const badge = createNode('div', 'devin-element-badge');
+    badge.textContent = label;
+    badge.style.backgroundColor = color;
+    document.body.appendChild(badge);
+    positionBadge(badge, el);
+    return badge;
+  }
+
+  function positionBadge(badge, el) {
+    const r = el.getBoundingClientRect();
+    badge.style.left = (r.left + window.scrollX) + 'px';
+    badge.style.top = (r.top + window.scrollY) + 'px';
+  }
+
+  function updateAllBadges() {
+    STATE.labels.forEach((data, el) => {
+      if (data.badge) positionBadge(data.badge, el);
+    });
+  }
+
   function collectSelectionData() {
     const elements = Array.from(STATE.selected);
     const pageUrl = window.location.href;
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     const scroll = { x: window.scrollX, y: window.scrollY };
 
-    const items = elements.map(el => {
-      const info = elementInfo(el);
-      return info;
-    });
-
+    const items = elements.map(el => elementInfo(el));
     const bounds = items.map(i => i.bounds);
-    const minX = Math.min(...bounds.map(b => b.left));
-    const minY = Math.min(...bounds.map(b => b.top));
-    const maxX = Math.max(...bounds.map(b => b.right));
-    const maxY = Math.max(...bounds.map(b => b.bottom));
+    const minX = bounds.length ? Math.min(...bounds.map(b => b.left)) : 0;
+    const minY = bounds.length ? Math.min(...bounds.map(b => b.top)) : 0;
+    const maxX = bounds.length ? Math.max(...bounds.map(b => b.right)) : 0;
+    const maxY = bounds.length ? Math.max(...bounds.map(b => b.bottom)) : 0;
 
     return {
       pageUrl,
@@ -200,6 +338,7 @@
       scroll,
       devicePixelRatio: window.devicePixelRatio || 1,
       itemCount: items.length,
+      labels: items.map(i => i.label).filter(Boolean),
       combinedBounds: bounds.length ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY } : null,
       elements: items
     };
@@ -207,7 +346,7 @@
 
   async function submitToDevin(panel, promptText) {
     if (!promptText.trim()) return;
-    const status = panel.querySelector('.devin-prompt-status');
+    const status = panel.querySelector('#devin-chat-status');
     status.textContent = 'Capturing context…';
 
     const data = collectSelectionData();
@@ -223,9 +362,14 @@
       });
       if (res.ok) {
         status.textContent = 'Sent to Devin.';
-        setTimeout(() => panel.remove(), 1000);
+        setTimeout(() => closeChatPanel(), 1000);
       } else {
-        status.textContent = `Error: ${res.error}`;
+        const msg = res.error || '';
+        if (msg.includes('403') || msg.toLowerCase().includes('unauthorized')) {
+          status.textContent = 'Error: 403 Unauthorized. Check your API key and session ID.';
+        } else {
+          status.textContent = `Error: ${msg}`;
+        }
       }
     } catch (e) {
       status.textContent = `Error: ${e.message}`;
@@ -243,7 +387,7 @@
     if (isInToolbar(target)) return;
     if (STATE.hoverEl) STATE.hoverEl.removeAttribute(HOVER_ATTR);
     STATE.hoverEl = target;
-    target.setAttribute(HOVER_ATTR, 'true');
+    if (target) target.setAttribute(HOVER_ATTR, 'true');
   }
 
   function onMouseDown(e) {
@@ -296,7 +440,7 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    updateToolbar();
+    afterSelectionChange();
   }
 
   function selectElementsInBox(rect) {
@@ -319,14 +463,9 @@
       if (intersects) candidates.push(el);
     }
 
-    // Prefer topmost (smallest) elements that are at least half inside the box.
     const selected = candidates.filter(el => {
       const r = el.getBoundingClientRect();
-      const iw = Math.max(0, Math.min(r.right, rect.right) - Math.max(r.left, rect.left));
-      const ih = Math.max(0, Math.min(r.bottom, rect.bottom) - Math.max(r.top, rect.top));
-      const area = r.width * r.height;
-      const overlap = iw * ih;
-      // skip children whose parent is already a candidate and fully contains them
+      // skip children whose parent is already selected
       const parent = candidates.find(p => p !== el && p.contains(el));
       if (parent) {
         const pr = parent.getBoundingClientRect();
@@ -334,22 +473,28 @@
           return false;
         }
       }
-      return overlap > 0;
+      return true;
     });
 
-    selected.forEach(el => {
-      STATE.selected.add(el);
-      el.setAttribute(SELECTOR_ATTR, 'true');
-    });
+    selected.forEach(el => STATE.selected.add(el));
   }
 
   function toggleElement(el) {
     if (STATE.selected.has(el)) {
       STATE.selected.delete(el);
-      el.removeAttribute(SELECTOR_ATTR);
     } else {
       STATE.selected.add(el);
-      el.setAttribute(SELECTOR_ATTR, 'true');
+    }
+  }
+
+  function afterSelectionChange() {
+    assignLabels();
+    updateToolbar();
+    updateAllBadges();
+    if (STATE.selected.size > 0) {
+      openChatPanel();
+    } else {
+      if (STATE.chatPanel) STATE.chatPanel.style.display = 'none';
     }
   }
 
@@ -363,13 +508,27 @@
   function onKeyDown(e) {
     if (e.key === 'Shift') STATE.shiftDown = true;
     if (e.key === 'Meta' || e.key === 'Control') STATE.metaDown = true;
-    if (e.key === 'Escape' && STATE.active && !STATE.promptPanel) toggleActive();
+    if (e.key === 'Escape' && STATE.active) {
+      if (STATE.chatPanel && STATE.chatPanel.style.display !== 'none') {
+        closeChatPanel();
+      } else {
+        toggleActive();
+      }
+    }
     if (e.key === 'Delete' && STATE.active) clearSelection();
   }
 
   function onKeyUp(e) {
     if (e.key === 'Shift') STATE.shiftDown = false;
     if (e.key === 'Meta' || e.key === 'Control') STATE.metaDown = false;
+  }
+
+  function onScrollResize() {
+    if (!STATE.active) return;
+    updateAllBadges();
+    if (STATE.chatPanel && STATE.chatPanel.style.display !== 'none') {
+      positionChatPanel();
+    }
   }
 
   function toggleActive() {
@@ -385,11 +544,12 @@
       document.addEventListener('click', onClick, true);
       document.addEventListener('keydown', onKeyDown, true);
       document.addEventListener('keyup', onKeyUp, true);
+      window.addEventListener('scroll', onScrollResize, true);
+      window.addEventListener('resize', onScrollResize, true);
     } else {
       overlay.classList.remove('devin-design-active');
       getToolbar().style.display = 'none';
-      if (STATE.promptPanel) STATE.promptPanel.remove();
-      clearSelection();
+      closeChatPanel();
       document.removeEventListener('mousemove', onMouseMove, true);
       document.removeEventListener('mousedown', onMouseDown, true);
       document.removeEventListener('mousemove', onMouseMoveBox, true);
@@ -397,6 +557,8 @@
       document.removeEventListener('click', onClick, true);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('scroll', onScrollResize, true);
+      window.removeEventListener('resize', onScrollResize, true);
     }
   }
 
