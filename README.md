@@ -28,7 +28,8 @@ _Once published:_ [Devin Design Mode](#) — click **Add to Chrome**.
 
 ### Manual install (developer mode)
 
-1. Download or clone this repository.
+1. Download or clone this repository:  
+   `git clone https://github.com/TJCurnutte/devin-design-mode.git`
 2. Open Chrome → `chrome://extensions`.
 3. Turn on **Developer mode**.
 4. Click **Load unpacked** and select the `devin-design-mode` folder.
