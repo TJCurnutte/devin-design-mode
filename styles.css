@@ -202,6 +202,35 @@
   box-sizing: border-box;
 }
 
+.devin-chat-target {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #888;
+  word-break: break-word;
+}
+
+.devin-chat-target.devin-target-checking {
+  color: #fbbf24;
+  border-color: #78350f;
+}
+
+.devin-chat-target.devin-target-ok {
+  color: #34d399;
+  border-color: #065f46;
+  background: #062e24;
+}
+
+.devin-chat-target.devin-target-bad {
+  color: #f87171;
+  border-color: #7f1d1d;
+  background: #2a0f0f;
+}
+
 .devin-chat-text {
   width: 100%;
   min-height: 100px;

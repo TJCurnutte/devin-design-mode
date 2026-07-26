@@ -21,6 +21,7 @@
     shiftDown: false,
     metaDown: false,
     paused: false,
+    verifiedTarget: null,
     toolbar: null,
     chatPanel: null,
     overlay: null
@@ -113,11 +114,12 @@
       <div class="devin-chat-body" id="devin-chat-body">
         <div class="devin-chat-chips" id="devin-chat-chips"></div>
         <div class="devin-chat-hint">Click a chip to insert its label into your prompt.</div>
-        <label class="devin-chat-label" for="devin-chat-session">Send to Space or session</label>
-        <input type="text" class="devin-chat-search" id="devin-chat-search" placeholder="Filter Spaces & sessions…">
+        <label class="devin-chat-label" for="devin-chat-session">Send to session</label>
+        <input type="text" class="devin-chat-search" id="devin-chat-search" placeholder="Filter by name, or paste a Devin session URL…">
         <select class="devin-chat-select" id="devin-chat-session">
-          <option value="">— loading Spaces & sessions —</option>
+          <option value="">— loading sessions —</option>
         </select>
+        <div class="devin-chat-target" id="devin-chat-target">No target selected</div>
         <textarea class="devin-chat-text" placeholder="e.g. img1 change this to match formatting of img2"></textarea>
         <div class="devin-chat-actions">
           <button class="devin-btn devin-btn-secondary" id="devin-chat-cancel">Clear</button>
@@ -137,6 +139,7 @@
       if (chip) insertLabelAtCursor(textarea, chip.dataset.label);
     };
     panel.querySelector('#devin-chat-search').addEventListener('input', (e) => filterSessionOptions(e.target.value));
+    panel.querySelector('#devin-chat-session').addEventListener('change', (e) => verifyTarget(e.target.value));
     setupDrag(header, panel);
     STATE.chatPanel = panel;
     document.body.appendChild(panel);
@@ -310,7 +313,8 @@
         if (item.id === defaultId) opt.selected = true;
         select.appendChild(opt);
       });
-      select.dataset.items = JSON.stringify(items.map(i => ({ id: i.id, title: i.title })));
+      if (!select.value && select.options.length) select.selectedIndex = 0;
+      verifyTarget(select.value);
     } catch (e) {
       select.innerHTML = `<option value="">Error: ${e.message}</option>`;
     }
@@ -337,11 +341,69 @@
   function filterSessionOptions(query) {
     const select = document.getElementById('devin-chat-session');
     if (!select) return;
-    const q = query.trim().toLowerCase();
+    const raw = query.trim();
+
+    // Pasting a Devin URL selects that session directly.
+    const urlMatch = raw.match(/\/(?:sessions|session|spaces)\/([^/?#\s]+)/);
+    if (urlMatch) {
+      verifyTarget(urlMatch[1], true);
+      return;
+    }
+
+    const q = raw.toLowerCase();
+    let firstVisible = null;
     Array.from(select.options).forEach(opt => {
       const text = (opt.dataset.filter || opt.textContent).toLowerCase();
-      opt.style.display = !q || text.includes(q) ? '' : 'none';
+      const show = !q || text.includes(q);
+      opt.style.display = show ? '' : 'none';
+      if (show && !firstVisible) firstVisible = opt;
     });
+    // Keep the selection on something the user can actually see.
+    if (firstVisible && select.selectedOptions[0] && select.selectedOptions[0].style.display === 'none') {
+      select.value = firstVisible.value;
+      verifyTarget(firstVisible.value);
+    }
+  }
+
+  async function verifyTarget(sessionId, fromUrl) {
+    const el = document.getElementById('devin-chat-target');
+    if (!el) return;
+    STATE.verifiedTarget = null;
+
+    if (!sessionId) {
+      el.className = 'devin-chat-target';
+      el.textContent = 'No target selected';
+      return;
+    }
+
+    el.className = 'devin-chat-target devin-target-checking';
+    el.textContent = 'Verifying target…';
+
+    try {
+      const res = await chrome.runtime.sendMessage({ action: 'verifyTarget', sessionId });
+      if (res.ok) {
+        STATE.verifiedTarget = res;
+        el.className = 'devin-chat-target devin-target-ok';
+        el.textContent = `Sending to: ${res.title} — ${res.status}`;
+        if (fromUrl) {
+          const select = document.getElementById('devin-chat-session');
+          let opt = Array.from(select.options).find(o => o.value === res.sessionId);
+          if (!opt) {
+            opt = createNode('option');
+            opt.value = res.sessionId;
+            opt.textContent = `${res.title} — ${res.status}`;
+            select.insertBefore(opt, select.firstChild);
+          }
+          select.value = res.sessionId;
+        }
+      } else {
+        el.className = 'devin-chat-target devin-target-bad';
+        el.textContent = res.error;
+      }
+    } catch (e) {
+      el.className = 'devin-chat-target devin-target-bad';
+      el.textContent = `Error: ${e.message}`;
+    }
   }
 
   function positionChatPanel() {
@@ -561,6 +623,17 @@
       status.textContent = 'Error: Select a Devin session first.';
       return;
     }
+
+    // Never send blind. Confirm the destination resolves to a real session.
+    if (!STATE.verifiedTarget || STATE.verifiedTarget.sessionId !== sessionId) {
+      status.textContent = 'Verifying target…';
+      await verifyTarget(sessionId);
+      if (!STATE.verifiedTarget) {
+        status.textContent = 'Error: Could not verify that session. Nothing was sent.';
+        return;
+      }
+    }
+
     status.textContent = 'Capturing context…';
 
     const data = collectSelectionData();
@@ -568,7 +641,7 @@
     try {
       const screenshot = await chrome.runtime.sendMessage({ action: 'captureScreenshot' });
       data.screenshot = screenshot;
-      status.textContent = 'Sending to Devin…';
+      status.textContent = `Sending to "${STATE.verifiedTarget.title}"…`;
       const res = await chrome.runtime.sendMessage({
         action: 'sendToDevin',
         prompt: promptText,
@@ -576,8 +649,9 @@
         sessionId
       });
       if (res.ok) {
-        status.textContent = 'Sent to Devin.';
-        setTimeout(() => closeChatPanel(), 1000);
+        const name = (res.target && res.target.title) || STATE.verifiedTarget.title;
+        status.textContent = `Sent to "${name}".`;
+        setTimeout(() => closeChatPanel(), 1600);
       } else {
         const msg = res.error || '';
         if (msg.includes('403') || msg.toLowerCase().includes('unauthorized')) {

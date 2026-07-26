@@ -34,6 +34,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     getSpacesFromDevinUI().then(sendResponse);
     return true;
   }
+
+  if (request.action === 'verifyTarget') {
+    chrome.storage.sync.get({ apiKey: '', apiVersion: 'v1', orgId: '' }, async (opts) => {
+      if (!opts.apiKey) return sendResponse({ ok: false, error: 'Devin API key not set.' });
+      sendResponse(await resolveTarget(opts, request.sessionId));
+    });
+    return true;
+  }
 });
 
 chrome.commands.onCommand.addListener(async (command) => {
@@ -153,14 +161,13 @@ async function sendToDevin(prompt, data, overrideSessionId) {
   const targetSessionId = overrideSessionId || opts.sessionId;
   if (!targetSessionId) return { ok: false, error: 'Devin session ID not set. Open extension options.' };
 
-  let sessionId = targetSessionId;
-  if (opts.apiVersion === 'v3') {
-    if (!opts.orgId) return { ok: false, error: 'Organization ID is required for v3 API.' };
-    if (!sessionId.startsWith('devin-')) sessionId = 'devin-' + sessionId;
-  } else {
-    // v1 expects the raw session ID without the devin- prefix.
-    if (sessionId.startsWith('devin-')) sessionId = sessionId.slice(6);
+  if (opts.apiVersion === 'v3' && !opts.orgId) {
+    return { ok: false, error: 'Organization ID is required for v3 API.' };
   }
+
+  // Confirm exactly which session we are about to message before sending anything.
+  const target = await resolveTarget(opts, targetSessionId);
+  if (!target.ok) return target;
 
   let attachmentUrl = null;
 
@@ -192,9 +199,7 @@ async function sendToDevin(prompt, data, overrideSessionId) {
     ? { message, attachment_urls: attachmentUrl && opts.imageMode === 'attachment' ? [attachmentUrl] : [] }
     : { message };
 
-  const url = opts.apiVersion === 'v3'
-    ? `https://api.devin.ai/v3/organizations/${opts.orgId}/sessions/${sessionId}/messages`
-    : `https://api.devin.ai/v1/sessions/${sessionId}/message`;
+  const url = messageUrl(opts, target.sessionId);
 
   try {
     const res = await fetch(url, {
@@ -205,21 +210,83 @@ async function sendToDevin(prompt, data, overrideSessionId) {
       },
       body: JSON.stringify(body)
     });
-    if (res.ok || res.status === 200) {
-      return { ok: true };
+    if (res.ok) {
+      return { ok: true, target: { sessionId: target.sessionId, title: target.title, status: target.status } };
     }
     let detail = '';
     try { detail = await res.text(); } catch (e) {}
     let error = `Devin API ${res.status}: ${detail || res.statusText}`;
     if (res.status === 401 || res.status === 403) {
-      error += '. Check that your API key is correct and that the session ID belongs to your account.';
+      error += '. Check that your API key is correct and that this session belongs to your account.';
     } else if (res.status === 404) {
-      error += '. The session may have finished, expired, or the session ID may be wrong. Pick an active session in settings.';
+      error += '. The session may have been archived or deleted.';
     }
     return { ok: false, error };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+}
+
+function sessionUrl(opts, id) {
+  return opts.apiVersion === 'v3'
+    ? `https://api.devin.ai/v3/organizations/${opts.orgId}/sessions/${id}`
+    : `https://api.devin.ai/v1/sessions/${id}`;
+}
+
+function messageUrl(opts, id) {
+  return opts.apiVersion === 'v3'
+    ? `https://api.devin.ai/v3/organizations/${opts.orgId}/sessions/${id}/messages`
+    : `https://api.devin.ai/v1/sessions/${id}/message`;
+}
+
+// Accepts a raw ID, a prefixed ID, or a full Devin URL. Confirms the session
+// really exists and returns the exact ID the API recognises, plus its title.
+async function resolveTarget(opts, input) {
+  const raw = extractSessionId(input);
+  if (!raw) return { ok: false, error: 'Could not read a session ID from that value.' };
+
+  const candidates = [];
+  const push = (v) => { if (v && !candidates.includes(v)) candidates.push(v); };
+  push(raw);
+  push(raw.startsWith('devin-') ? raw.slice(6) : 'devin-' + raw);
+
+  let lastError = '';
+  for (const id of candidates) {
+    try {
+      const res = await fetch(sessionUrl(opts, id), {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${opts.apiKey}` }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return {
+          ok: true,
+          sessionId: json.session_id || id,
+          title: json.title || '(untitled)',
+          status: json.status_enum || json.status || 'unknown'
+        };
+      }
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, error: `Devin API ${res.status}: your API key cannot access this session.` };
+      }
+      lastError = `Devin API ${res.status}`;
+    } catch (e) {
+      lastError = e.message;
+    }
+  }
+
+  return {
+    ok: false,
+    error: `Session not found (${lastError}). "${raw}" is not a session your API key can reach. Spaces cannot receive messages — pick a session inside the Space.`
+  };
+}
+
+function extractSessionId(input) {
+  if (!input) return '';
+  const value = String(input).trim();
+  const urlMatch = value.match(/\/(?:sessions|session|spaces)\/([^/?#\s]+)/);
+  if (urlMatch) return urlMatch[1];
+  return value;
 }
 
 async function listSessions(apiVersion, apiKey, orgId) {

@@ -56,6 +56,22 @@ _Once published:_ [Devin Design Mode](#) — click **Add to Chrome**.
 6. Type your request (e.g. `img1 change this to match formatting of img2`) and hit **Send**.
 7. Switch to your Devin session to see the agent work with the context.
 
+## Choosing the target session
+
+Devin's API exposes **sessions**, not Spaces. A Space is a UI grouping and cannot
+receive messages — pick a session that lives inside the Space.
+
+To remove all doubt about where a message lands, the chat panel:
+
+1. Lists sessions from the API, plus any session links found in an open `app.devin.ai` tab.
+2. Lets you filter by name, or paste a full Devin session URL.
+3. **Verifies the target** against the API and shows a green
+   `Sending to: <title> — <status>` banner before you send.
+4. Refuses to send if the target cannot be verified.
+
+Session ID prefixes (`devin-`) are normalised automatically — the extension tries
+both forms and uses whichever the API recognises.
+
 ## API version notes
 
 - **v1 (personal API keys — recommended)** — uploads the cropped screenshot to Devin's v1 attachments endpoint and references it in the message with `ATTACHMENT:"<url>"`. This works with any personal API key and renders reliably in Devin.
