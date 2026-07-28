@@ -20,12 +20,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'getSessions') {
     chrome.storage.sync.get({ apiKey: '', apiVersion: 'v1', orgId: '', sessionId: '' }, async (opts) => {
-      const res = await listSessions(opts.apiVersion, opts.apiKey, opts.orgId);
-      if (res.ok) {
-        sendResponse({ ok: true, sessions: res.sessions, defaultSessionId: opts.sessionId });
-      } else {
-        sendResponse(res);
-      }
+      // Request values (typed into Options but not yet saved) win over stored ones.
+      const merged = {
+        apiKey: request.apiKey || opts.apiKey,
+        apiVersion: request.apiVersion || opts.apiVersion,
+        orgId: request.orgId || opts.orgId,
+        sessionId: opts.sessionId
+      };
+      const res = await listSessions(merged.apiVersion, merged.apiKey, merged.orgId);
+      sendResponse({ ...res, apiKeySet: !!merged.apiKey, defaultSessionId: merged.sessionId });
     });
     return true;
   }
@@ -291,47 +294,75 @@ function extractSessionId(input) {
 
 async function listSessions(apiVersion, apiKey, orgId) {
   if (!apiKey) return { ok: false, error: 'API key not set.' };
+  if (apiVersion === 'v3') {
+    if (!orgId) return { ok: false, error: 'Organization ID is required for v3 API.' };
+    return listSessionsV3(apiKey, orgId);
+  }
+  return listSessionsV1(apiKey);
+}
 
+async function listSessionsV1(apiKey) {
   const all = [];
-  let offset = 0;
   const limit = 100;
-  const maxPages = 3;
-
-  for (let page = 0; page < maxPages; page++) {
-    const baseUrl = apiVersion === 'v3'
-      ? `https://api.devin.ai/v3/organizations/${orgId}/sessions?limit=${limit}&offset=${offset}`
-      : `https://api.devin.ai/v1/sessions?limit=${limit}&offset=${offset}`;
+  for (let page = 0; page < 5; page++) {
+    const url = `https://api.devin.ai/v1/sessions?limit=${limit}&offset=${page * limit}`;
     try {
-      const res = await fetch(baseUrl, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${apiKey}` }
-      });
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
       if (!res.ok) {
         if (all.length) break;
-        let detail = '';
-        try { detail = await res.text(); } catch (e) {}
-        return { ok: false, error: `Devin API ${res.status}: ${detail || res.statusText}` };
+        return { ok: false, error: await apiError(res) };
       }
       const json = await res.json();
-      const sessions = (json.sessions || []);
-      if (!sessions.length) break;
-      all.push(...sessions);
-      if (sessions.length < limit) break;
-      offset += limit;
+      const batch = json.sessions || [];
+      all.push(...batch);
+      if (batch.length < limit) break;
     } catch (e) {
       if (all.length) break;
       return { ok: false, error: e.message };
     }
   }
+  return { ok: true, sessions: normalizeSessions(all) };
+}
 
-  const mapped = all.map(s => ({
-    session_id: s.session_id,
+async function listSessionsV3(apiKey, orgId) {
+  const all = [];
+  let after = null;
+  for (let page = 0; page < 5; page++) {
+    let url = `https://api.devin.ai/v3/organizations/${orgId}/sessions?first=100`;
+    if (after) url += `&after=${encodeURIComponent(after)}`;
+    try {
+      const res = await fetch(url, { headers: { 'Authorization': `Bearer ${apiKey}` } });
+      if (!res.ok) {
+        if (all.length) break;
+        return { ok: false, error: await apiError(res) };
+      }
+      const json = await res.json();
+      const batch = json.items || json.sessions || [];
+      all.push(...batch);
+      if (!json.has_next_page || !json.end_cursor) break;
+      after = json.end_cursor;
+    } catch (e) {
+      if (all.length) break;
+      return { ok: false, error: e.message };
+    }
+  }
+  return { ok: true, sessions: normalizeSessions(all) };
+}
+
+function normalizeSessions(list) {
+  return list.map(s => ({
+    session_id: s.devin_id || s.session_id || s.id || '',
     title: s.title || '(untitled)',
-    status: s.status,
-    updated_at: s.updated_at
-  })).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at));
+    status: s.status_enum || s.status || 'unknown',
+    updated_at: s.updated_at || s.created_at || null
+  })).filter(s => s.session_id)
+    .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0));
+}
 
-  return { ok: true, sessions: mapped };
+async function apiError(res) {
+  let detail = '';
+  try { detail = await res.text(); } catch (e) {}
+  return `Devin API ${res.status}: ${detail || res.statusText}`;
 }
 
 async function getSpacesFromDevinUI() {
@@ -340,7 +371,7 @@ async function getSpacesFromDevinUI() {
       url: ['https://app.devin.ai/*', 'https://devin.ai/*', 'https://*.devin.ai/*']
     });
     if (!tabs.length) {
-      return { ok: false, error: 'Open app.devin.ai to load Spaces.' };
+      return { ok: false, error: 'No Devin tab open. Open app.devin.ai to include Spaces sidebar items.' };
     }
     const all = [];
     for (const tab of tabs) {
@@ -372,58 +403,25 @@ async function getSpacesFromDevinUI() {
 }
 
 function scrapeDevinSidebar() {
+  // Collect every session/space link on the Devin page, in DOM order.
+  // The Spaces sidebar items are anchors; dedupe by ID.
   const results = [];
   const seen = new Set();
-
-  function add(title, id, url, type) {
-    if (!title || !id || seen.has(url)) return;
-    seen.add(url);
-    results.push({ title, id, url, type, updated_at: null });
-  }
-
-  // 1. Try to find the Spaces heading and nearby links.
-  const all = document.querySelectorAll('*');
-  let spacesHeading = null;
-  for (const el of all) {
-    if (el.children.length === 1 && el.children[0].nodeType === 3 && el.textContent.trim() === 'Spaces') {
-      spacesHeading = el;
-      break;
-    }
-    if (el.children.length === 0 && el.textContent.trim() === 'Spaces') {
-      spacesHeading = el;
-      break;
-    }
-  }
-  if (spacesHeading) {
-    let container = spacesHeading.parentElement;
-    for (let i = 0; i < 8 && container; i++) {
-      const links = container.querySelectorAll('a[href*="/sessions/"], a[href*="/spaces/"]');
-      if (links.length >= 1) {
-        links.forEach(a => {
-          const href = a.getAttribute('href') || '';
-          const m = href.match(/\/(?:sessions|spaces)\/([^/?#]+)/);
-          const title = a.textContent.trim();
-          if (m && title) add(title, m[1], href, href.includes('/spaces/') ? 'space' : 'session');
-        });
-        break;
-      }
-      container = container.parentElement;
-    }
-  }
-
-  // 2. Fallback: left-hand links anywhere on the page.
-  if (!results.length) {
-    const vw = window.innerWidth;
-    document.querySelectorAll('a[href*="/sessions/"], a[href*="/spaces/"]').forEach(a => {
-      const rect = a.getBoundingClientRect();
-      if (rect.left > vw * 0.35) return;
-      const href = a.getAttribute('href') || '';
-      const m = href.match(/\/(?:sessions|spaces)\/([^/?#]+)/);
-      const title = a.textContent.trim();
-      if (m && title) add(title, m[1], href, href.includes('/spaces/') ? 'space' : 'session');
+  document.querySelectorAll('a[href*="/sessions/"], a[href*="/spaces/"]').forEach(a => {
+    const href = a.getAttribute('href') || '';
+    const m = href.match(/\/(?:sessions|spaces)\/([^/?#]+)/);
+    if (!m || seen.has(m[1])) return;
+    const title = (a.textContent || '').trim();
+    if (!title || title.length > 120) return;
+    seen.add(m[1]);
+    results.push({
+      title,
+      id: m[1],
+      url: href,
+      type: href.includes('/spaces/') ? 'space' : 'session',
+      updated_at: null
     });
-  }
-
+  });
   return results;
 }
 

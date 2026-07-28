@@ -243,32 +243,26 @@
   async function loadSessionOptions() {
     const select = document.getElementById('devin-chat-session');
     if (!select) return;
-    select.innerHTML = '<option value="">Loading Spaces & sessions…</option>';
-    select.dataset.source = '';
+    select.innerHTML = '<option value="">Loading sessions…</option>';
 
     try {
-      const [spacesRes, sessionsRes] = await Promise.all([
-        chrome.runtime.sendMessage({ action: 'getSpacesFromDevinUI' }).catch(() => ({ ok: false })),
-        chrome.runtime.sendMessage({ action: 'getSessions' }).catch(() => ({ ok: false }))
-      ]);
+      // The API is the source of truth. The Spaces sidebar scrape is a bonus.
+      const sessionsRes = await chrome.runtime.sendMessage({ action: 'getSessions' })
+        .catch(() => ({ ok: false, error: 'Background worker unreachable. Reload the extension.' }));
+
+      if (sessionsRes.ok === false && sessionsRes.apiKeySet === false) {
+        select.innerHTML = '<option value="">Devin API key not set</option>';
+        setTargetBanner('Devin API key not set. Open extension Settings to connect.', 'bad', true);
+        return;
+      }
+
+      const spacesRes = await chrome.runtime.sendMessage({ action: 'getSpacesFromDevinUI' })
+        .catch(() => ({ ok: false }));
 
       const seen = new Set();
       const items = [];
 
-      if (spacesRes.ok && spacesRes.spaces) {
-        spacesRes.spaces.forEach(sp => {
-          if (seen.has(sp.id)) return;
-          seen.add(sp.id);
-          items.push({
-            id: sp.id,
-            title: sp.title,
-            status: sp.type === 'space' ? 'space' : (sp.status || ''),
-            updated_at: sp.updated_at,
-            source: 'Spaces bar'
-          });
-        });
-      }
-
+      // API sessions first — these are the only guaranteed-sendable targets.
       if (sessionsRes.ok && sessionsRes.sessions) {
         sessionsRes.sessions.forEach(s => {
           if (seen.has(s.session_id)) return;
@@ -283,18 +277,35 @@
         });
       }
 
+      // Sidebar items the API didn't already give us. Spaces cannot receive
+      // messages, so mark them and show they are not directly sendable.
+      if (spacesRes.ok && spacesRes.spaces) {
+        spacesRes.spaces.forEach(sp => {
+          if (seen.has(sp.id)) return;
+          seen.add(sp.id);
+          items.push({
+            id: sp.id,
+            title: sp.title,
+            status: sp.type === 'space' ? 'space' : 'session',
+            updated_at: null,
+            source: 'Spaces bar'
+          });
+        });
+      }
+
       if (!items.length) {
-        const err = spacesRes.error || sessionsRes.error || 'No Spaces or sessions found.';
+        const err = sessionsRes.error || spacesRes.error || 'No sessions found in your Devin org.';
         select.innerHTML = `<option value="">${err}</option>`;
+        setTargetBanner(err, 'bad', false);
         return;
       }
 
-      // Active sessions first, then Spaces, then by recency
+      // Active sessions first, then everything else by recency.
       const activeStatuses = new Set(['working', 'blocked', 'resume_requested', 'resumed']);
       items.sort((a, b) => {
-        const aActive = activeStatuses.has(a.status) ? 2 : a.source === 'Spaces bar' ? 1 : 0;
-        const bActive = activeStatuses.has(b.status) ? 2 : b.source === 'Spaces bar' ? 1 : 0;
-        if (aActive !== bActive) return bActive - aActive;
+        const aRank = activeStatuses.has(a.status) ? 2 : a.source === 'API' ? 1 : 0;
+        const bRank = activeStatuses.has(b.status) ? 2 : b.source === 'API' ? 1 : 0;
+        if (aRank !== bRank) return bRank - aRank;
         const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
         const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
         return bTime - aTime;
@@ -305,7 +316,8 @@
       items.forEach(item => {
         const when = item.updated_at ? timeAgo(new Date(item.updated_at)) : '';
         const status = item.status ? item.status.replace(/_/g, ' ') : '';
-        const parts = [item.title, when, status, item.source === 'Spaces bar' ? 'Spaces' : ''].filter(Boolean);
+        const suffix = item.source === 'Spaces bar' ? 'Spaces' : '';
+        const parts = [item.title, when, status, suffix].filter(Boolean);
         const opt = createNode('option');
         opt.value = item.id;
         opt.textContent = parts.join(' — ');
@@ -317,6 +329,22 @@
       verifyTarget(select.value);
     } catch (e) {
       select.innerHTML = `<option value="">Error: ${e.message}</option>`;
+    }
+  }
+
+  function setTargetBanner(text, state, openSettings) {
+    const el = document.getElementById('devin-chat-target');
+    if (!el) return;
+    el.className = 'devin-chat-target' + (state === 'ok' ? ' devin-target-ok' : state === 'bad' ? ' devin-target-bad' : '');
+    el.textContent = text;
+    if (openSettings) {
+      el.style.cursor = 'pointer';
+      el.title = 'Open extension settings';
+      el.onclick = () => chrome.runtime.openOptionsPage();
+    } else {
+      el.style.cursor = '';
+      el.title = '';
+      el.onclick = null;
     }
   }
 
@@ -366,25 +394,22 @@
   }
 
   async function verifyTarget(sessionId, fromUrl) {
-    const el = document.getElementById('devin-chat-target');
-    if (!el) return;
     STATE.verifiedTarget = null;
 
     if (!sessionId) {
-      el.className = 'devin-chat-target';
-      el.textContent = 'No target selected';
+      setTargetBanner('No target selected', '', false);
       return;
     }
 
-    el.className = 'devin-chat-target devin-target-checking';
-    el.textContent = 'Verifying target…';
+    setTargetBanner('Verifying target…', '', false);
+    const el = document.getElementById('devin-chat-target');
+    if (el) el.classList.add('devin-target-checking');
 
     try {
       const res = await chrome.runtime.sendMessage({ action: 'verifyTarget', sessionId });
       if (res.ok) {
         STATE.verifiedTarget = res;
-        el.className = 'devin-chat-target devin-target-ok';
-        el.textContent = `Sending to: ${res.title} — ${res.status}`;
+        setTargetBanner(`Sending to: ${res.title} — ${res.status}`, 'ok', false);
         if (fromUrl) {
           const select = document.getElementById('devin-chat-session');
           let opt = Array.from(select.options).find(o => o.value === res.sessionId);
@@ -397,12 +422,11 @@
           select.value = res.sessionId;
         }
       } else {
-        el.className = 'devin-chat-target devin-target-bad';
-        el.textContent = res.error;
+        const keyMissing = /not set/i.test(res.error || '');
+        setTargetBanner(res.error, 'bad', keyMissing);
       }
     } catch (e) {
-      el.className = 'devin-chat-target devin-target-bad';
-      el.textContent = `Error: ${e.message}`;
+      setTargetBanner(`Error: ${e.message}`, 'bad', false);
     }
   }
 
