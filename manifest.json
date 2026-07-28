@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Devin Design Mode",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Cursor-style Design Mode for Devin. Select elements or drag a box and send visual context to your Devin session.",
   "permissions": [
     "activeTab",
